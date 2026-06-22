@@ -23,6 +23,12 @@
 
 import { z, type ZodType } from "zod";
 
+/**
+ * A verb authored once: typed input/output zod schemas, the owning actor, the
+ * run implementation, and optional CLI projections. The `to*` functions project
+ * it to every surface (CLI / MCP / OpenAPI / Anthropic tool) — author once, run
+ * everywhere.
+ */
 export type VerbSpec<I extends ZodType = ZodType, O extends ZodType = ZodType, C = unknown> = {
   /** Stable verb id — the CLI subcommand, MCP tool name, OpenAPI operationId. */
   id: string;
@@ -83,6 +89,7 @@ export function defineVerb<I extends ZodType, O extends ZodType, C = unknown>(
   return spec;
 }
 
+/** A JSON Schema object — the projected shape of a verb's input or output. */
 export type JsonSchema = Record<string, unknown>;
 
 /**
@@ -93,6 +100,7 @@ export type JsonSchema = Record<string, unknown>;
  * network/parse error vs exit 1 for a refusal). CLI-only.
  */
 export class CliExitError extends Error {
+  /** Create the error with `message` and the CLI `exitCode` it should exit with. */
   constructor(
     message: string,
     readonly exitCode: number,
@@ -109,26 +117,33 @@ export class CliExitError extends Error {
  */
 export const verbToken = (id: string): string => id.replace(/\s+/g, "_");
 
+/** The verb's input schema as a JSON Schema. */
 export const toInputJsonSchema = (v: VerbSpec): JsonSchema => z.toJSONSchema(v.input) as JsonSchema;
+/** The verb's output schema as a JSON Schema. */
 export const toOutputJsonSchema = (v: VerbSpec): JsonSchema =>
   z.toJSONSchema(v.output) as JsonSchema;
 
 // ── projections ─────────────────────────────────────────────────────────────
 
+/** An MCP tool descriptor (name + description + input schema). */
 export type McpTool = { name: string; description: string; inputSchema: JsonSchema };
+/** Project a {@link VerbSpec} to an MCP tool descriptor. */
 export const toMcpTool = (v: VerbSpec): McpTool => ({
   name: verbToken(v.id),
   description: v.summary,
   inputSchema: toInputJsonSchema(v),
 });
 
+/** An Anthropic tool descriptor (name + description + `input_schema`). */
 export type AnthropicTool = { name: string; description: string; input_schema: JsonSchema };
+/** Project a {@link VerbSpec} to an Anthropic tool descriptor. */
 export const toAnthropicTool = (v: VerbSpec): AnthropicTool => ({
   name: verbToken(v.id),
   description: v.summary,
   input_schema: toInputJsonSchema(v),
 });
 
+/** Project a {@link VerbSpec} to an OpenAPI operation object. */
 export const toOpenApiOperation = (v: VerbSpec): JsonSchema => ({
   operationId: verbToken(v.id),
   summary: v.summary,
@@ -166,6 +181,7 @@ export const toMcpToolset = (reg: Registry): McpTool[] => Object.values(reg).map
 // properties, and whose `result` wraps the output schema — the same Zod source
 // the CLI/MCP/OpenAPI surfaces already read, seen from one more side.
 
+/** An OpenRPC content descriptor — a named, schema-typed parameter or result. */
 export type ContentDescriptor = { name: string; required: boolean; schema: JsonSchema };
 
 /** Top-level input properties → OpenRPC Content Descriptors (by-name params). */
@@ -211,9 +227,13 @@ export const toOpenRpcDocument = (
 // daemon protocol becomes one more projection — its client types derive from
 // the same `output` schema, so there is no drift between server and client.
 
+/** A JSON-RPC 2.0 request/response id. */
 export type JsonRpcId = string | number | null;
+/** A JSON-RPC 2.0 request (method + optional params/id). */
 export type JsonRpcRequest = { jsonrpc?: "2.0"; id?: JsonRpcId; method: string; params?: unknown };
+/** A JSON-RPC 2.0 error object (code + message + optional data). */
 export type JsonRpcError = { code: number; message: string; data?: unknown };
+/** A JSON-RPC 2.0 response — either a `result` or an `error`. */
 export type JsonRpcResponse =
   | { jsonrpc: "2.0"; id: JsonRpcId; result: unknown }
   | { jsonrpc: "2.0"; id: JsonRpcId; error: JsonRpcError };
@@ -280,6 +300,7 @@ type JsonProps = {
   required?: string[];
 };
 
+/** Render a {@link VerbSpec} as CLI `--help` text (usage, positionals, flags) for `bin`. */
 export function toHelp(v: VerbSpec, bin = "prx"): string {
   const js = toInputJsonSchema(v) as JsonProps;
   const props = js.properties ?? {};
@@ -376,9 +397,12 @@ export function parseArgs<I extends ZodType>(
 // at the registry boundary (each verb's `run` only ever sees its own parsed
 // input and its own `deps()` default, so the registry never needs the precise
 // per-verb types — `defineVerb` keeps those for authoring).
+/** A {@link VerbSpec} with its input/output/deps types erased — what a {@link Registry} holds. */
 export type AnyVerbSpec = VerbSpec<any, any, any>;
+/** A set of verbs keyed by id — the dispatch surface. */
 export type Registry = Record<string, AnyVerbSpec>;
 
+/** The outcome of dispatching argv against a {@link Registry}: help text, an ok result, or (below) an error/exit. */
 export type DispatchResult =
   | { kind: "help"; text: string }
   | { kind: "ok"; id: string; output: unknown; input: unknown };
