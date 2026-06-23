@@ -1,0 +1,10 @@
+{
+  "name": {
+    "type": "name",
+    "value": "Verbspec"
+  },
+  "description": {
+    "type": "meta",
+    "value": "Spec-driven CLI core: author a verb once as a typed VerbSpec, project it to CLI, MCP, OpenAPI, and Anthropic tool surfaces"
+  }
+}
