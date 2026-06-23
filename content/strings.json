@@ -5,6 +5,10 @@
   },
   "description": {
     "type": "meta",
-    "value": "Spec-driven CLI core: author a verb once as a typed VerbSpec, project it to CLI, MCP, OpenAPI, and Anthropic tool surfaces"
+    "value": "Spec-driven CLI core — author a verb once, project it everywhere.  A verb's input and output are Zod schemas.  JSON Schema (z."
+  },
+  "keywords": {
+    "type": "body",
+    "value": "VERBSPEC · CLI · ZOD · JSON-SCHEMA · MCP · OPENAPI · ANTHROPIC-TOOLS · SPEC-DRIVEN"
   }
 }
