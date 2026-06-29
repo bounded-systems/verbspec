@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { z } from "zod";
 
-import { defineVerb, parseArgs } from "@bounded-systems/verbspec";
+import { defineVerb, dispatch, parseArgs } from "@bounded-systems/verbspec";
 
 // parseArgs CLI-isms for array-typed input fields: repeated flags accumulate,
 // comma-separated values split, and the two forms compose. Scalars take the
@@ -86,5 +86,50 @@ describe("parseArgs variadic positionals", () => {
 
   test("empty when nothing is given", () => {
     expect(ids([])).toEqual([]);
+  });
+});
+
+describe("dispatch multi-word ids", () => {
+  const planSession = defineVerb({
+    id: "plan session",
+    summary: "open a plan session",
+    actor: "work",
+    positionals: ["name"],
+    input: z.object({ name: z.string() }),
+    output: z.object({ name: z.string() }),
+    run: ({ name }) => ({ name }),
+  });
+
+  const plan = defineVerb({
+    id: "plan",
+    summary: "short plan verb",
+    actor: "work",
+    input: z.object({ session: z.string().optional() }),
+    output: z.object({ kind: z.string() }),
+    run: () => ({ kind: "plan" }),
+  });
+
+  test("resolves a space-separated argv prefix as one verb id", async () => {
+    const out = await dispatch({ "plan session": planSession }, ["plan", "session", "alpha"]);
+    expect(out).toMatchObject({
+      kind: "ok",
+      id: "plan session",
+      input: { name: "alpha" },
+      output: { name: "alpha" },
+    });
+  });
+
+  test("prefers the longest matching verb id", async () => {
+    const out = await dispatch({ plan, "plan session": planSession }, ["plan", "session", "beta"]);
+    expect(out).toMatchObject({
+      kind: "ok",
+      id: "plan session",
+      input: { name: "beta" },
+    });
+  });
+
+  test("keeps exact one-token ids working", async () => {
+    const out = await dispatch({ plan, "plan session": planSession }, ["plan"]);
+    expect(out).toMatchObject({ kind: "ok", id: "plan", output: { kind: "plan" } });
   });
 });
