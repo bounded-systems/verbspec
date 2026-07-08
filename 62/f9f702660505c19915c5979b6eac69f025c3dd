@@ -1,0 +1,27 @@
+.github/workflows/standard.yml
+  s_0a07a894d9cc8f::t_1b9a9b627b6bc2 1-3,7,11-17
+.release/json-schema-verb.md
+  s_0a07a894d9cc8f::t_a7565c894c24d1 1-4
+src/__tests__/index.test.ts
+  s_0a07a894d9cc8f::t_bf4d685cb4f5d3 4,92-130
+src/__tests__/json-schema-verb.test.ts
+  s_0a07a894d9cc8f::t_3abf4f84f4ce5d 1-74
+src/index.ts
+  s_0a07a894d9cc8f::t_002727718ff3f3 95-118,144-150,157,166,173,190,199-200,215,230,240
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "62f9f702660505c19915c5979b6eac69f025c3dd",
+  "prompts": {},
+  "sessions": {
+    "s_0a07a894d9cc8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7263b900-7c6e-43dd-8d77-1c263d5b94b7",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>"
+    }
+  }
+}
