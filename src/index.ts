@@ -434,16 +434,28 @@ export type DispatchResult =
   | { kind: "help"; text: string }
   | { kind: "ok"; id: string; output: unknown; input: unknown };
 
+const resolveCliVerb = (
+  reg: Registry,
+  argv: readonly string[],
+): { verb: AnyVerbSpec; id: string; rest: readonly string[] } | undefined => {
+  for (let end = argv.length; end > 0; end--) {
+    const id = argv.slice(0, end).join(" ");
+    const verb = reg[id];
+    if (verb) return { verb, id, rest: argv.slice(end) };
+  }
+  return undefined;
+};
+
 /** Resolve verb → parse → run. This is ALL `cli.ts` needs to be. */
 export async function dispatch(
   reg: Registry,
   argv: readonly string[],
   bin = "prx",
 ): Promise<DispatchResult> {
-  const [id, ...rest] = argv;
-  if (!id) throw new Error("no verb given");
-  const v = reg[id];
-  if (!v) throw new Error(`unknown verb: ${id}`);
+  if (!argv.length) throw new Error("no verb given");
+  const resolved = resolveCliVerb(reg, argv);
+  if (!resolved) throw new Error(`unknown verb: ${argv[0]}`);
+  const { verb: v, id, rest } = resolved;
   if (rest.includes("--help") || rest.includes("-h")) return { kind: "help", text: toHelp(v, bin) };
   const input = parseArgs(v, rest);
   // Each verb runs against its own default deps slice (reals); pure verbs omit
