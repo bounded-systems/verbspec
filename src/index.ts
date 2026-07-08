@@ -93,6 +93,30 @@ export function defineVerb<I extends ZodType, O extends ZodType, C = unknown>(
 export type JsonSchema = Record<string, unknown>;
 
 /**
+ * A verb whose input/output are supplied as *pre-computed JSON Schema* rather
+ * than Zod — the seam for non-Zod contract sources (e.g. a Cap'n Proto schema
+ * projected to JSON Schema). It feeds the OpenRPC / MCP / OpenAPI surfaces
+ * exactly like a Zod {@link VerbSpec} (the projectors already operate on JSON
+ * Schema), but it is **projection-only**: `parseArgs` / `dispatch` /
+ * `dispatchNdjson` need Zod's `parse`/`safeParse` for runtime validation, so a
+ * JSON-Schema verb is not runtime-dispatchable until a JSON Schema validator is
+ * wired. Discriminated from {@link VerbSpec} by the presence of `inputSchema`.
+ */
+export type JsonSchemaVerbSpec = {
+  id: string;
+  summary: string;
+  actor: string;
+  inputSchema: JsonSchema;
+  outputSchema: JsonSchema;
+};
+
+/** Any verb that can be PROJECTED to a surface — Zod-backed ({@link VerbSpec})
+ *  or JSON-Schema-first ({@link JsonSchemaVerbSpec}). The dispatch surfaces
+ *  ({@link dispatch} / {@link Registry}) stay Zod-only; only the doc/tool
+ *  projections accept this wider type. */
+export type ProjectableVerb = AnyVerbSpec | JsonSchemaVerbSpec;
+
+/**
  * A verb-thrown error carrying an explicit CLI exit code. The bridge
  * (`runSpecVerb`) maps it to `output.error(message)` + that code, with NO
  * stdout — for verbs that distinguish "the check ran and refused" from "the
@@ -117,18 +141,20 @@ export class CliExitError extends Error {
  */
 export const verbToken = (id: string): string => id.replace(/\s+/g, "_");
 
-/** The verb's input schema as a JSON Schema. */
-export const toInputJsonSchema = (v: VerbSpec): JsonSchema => z.toJSONSchema(v.input) as JsonSchema;
-/** The verb's output schema as a JSON Schema. */
-export const toOutputJsonSchema = (v: VerbSpec): JsonSchema =>
-  z.toJSONSchema(v.output) as JsonSchema;
+/** The verb's input schema as a JSON Schema. Zod verbs convert via
+ *  `z.toJSONSchema`; a {@link JsonSchemaVerbSpec} supplies it directly. */
+export const toInputJsonSchema = (v: ProjectableVerb): JsonSchema =>
+  "inputSchema" in v ? v.inputSchema : (z.toJSONSchema(v.input) as JsonSchema);
+/** The verb's output schema as a JSON Schema (see {@link toInputJsonSchema}). */
+export const toOutputJsonSchema = (v: ProjectableVerb): JsonSchema =>
+  "outputSchema" in v ? v.outputSchema : (z.toJSONSchema(v.output) as JsonSchema);
 
 // ── projections ─────────────────────────────────────────────────────────────
 
 /** An MCP tool descriptor (name + description + input schema). */
 export type McpTool = { name: string; description: string; inputSchema: JsonSchema };
 /** Project a {@link VerbSpec} to an MCP tool descriptor. */
-export const toMcpTool = (v: VerbSpec): McpTool => ({
+export const toMcpTool = (v: ProjectableVerb): McpTool => ({
   name: verbToken(v.id),
   description: v.summary,
   inputSchema: toInputJsonSchema(v),
@@ -137,14 +163,14 @@ export const toMcpTool = (v: VerbSpec): McpTool => ({
 /** An Anthropic tool descriptor (name + description + `input_schema`). */
 export type AnthropicTool = { name: string; description: string; input_schema: JsonSchema };
 /** Project a {@link VerbSpec} to an Anthropic tool descriptor. */
-export const toAnthropicTool = (v: VerbSpec): AnthropicTool => ({
+export const toAnthropicTool = (v: ProjectableVerb): AnthropicTool => ({
   name: verbToken(v.id),
   description: v.summary,
   input_schema: toInputJsonSchema(v),
 });
 
 /** Project a {@link VerbSpec} to an OpenAPI operation object. */
-export const toOpenApiOperation = (v: VerbSpec): JsonSchema => ({
+export const toOpenApiOperation = (v: ProjectableVerb): JsonSchema => ({
   operationId: verbToken(v.id),
   summary: v.summary,
   "x-prx-actor": v.actor,
@@ -161,7 +187,7 @@ export const toOpenApiOperation = (v: VerbSpec): JsonSchema => ({
 });
 
 /** Project a whole registry to an OpenAPI `paths` object (ids → `/a/b` paths). */
-export const toOpenApiPaths = (reg: Registry): JsonSchema =>
+export const toOpenApiPaths = (reg: Record<string, ProjectableVerb>): JsonSchema =>
   Object.fromEntries(
     Object.values(reg).map((v) => [
       `/${v.id.split(" ").join("/")}`,
@@ -170,7 +196,8 @@ export const toOpenApiPaths = (reg: Registry): JsonSchema =>
   );
 
 /** Project a whole registry to an MCP toolset. */
-export const toMcpToolset = (reg: Registry): McpTool[] => Object.values(reg).map(toMcpTool);
+export const toMcpToolset = (reg: Record<string, ProjectableVerb>): McpTool[] =>
+  Object.values(reg).map(toMcpTool);
 
 // ── OpenRPC projection (the JSON-RPC analogue of OpenAPI) ─────────────────────
 //
@@ -185,7 +212,7 @@ export const toMcpToolset = (reg: Registry): McpTool[] => Object.values(reg).map
 export type ContentDescriptor = { name: string; required: boolean; schema: JsonSchema };
 
 /** Top-level input properties → OpenRPC Content Descriptors (by-name params). */
-const toContentDescriptors = (v: VerbSpec): ContentDescriptor[] => {
+const toContentDescriptors = (v: ProjectableVerb): ContentDescriptor[] => {
   const js = toInputJsonSchema(v) as {
     properties?: Record<string, JsonSchema>;
     required?: string[];
@@ -200,7 +227,7 @@ const toContentDescriptors = (v: VerbSpec): ContentDescriptor[] => {
 };
 
 /** Project one verb to an OpenRPC Method Object. */
-export const toOpenRpcMethod = (v: VerbSpec): JsonSchema => ({
+export const toOpenRpcMethod = (v: ProjectableVerb): JsonSchema => ({
   name: verbToken(v.id),
   summary: v.summary,
   "x-prx-actor": v.actor,
@@ -210,7 +237,7 @@ export const toOpenRpcMethod = (v: VerbSpec): JsonSchema => ({
 
 /** Project a whole registry to an OpenRPC document. */
 export const toOpenRpcDocument = (
-  reg: Registry,
+  reg: Record<string, ProjectableVerb>,
   info: { title: string; version: string } = { title: "verbspec", version: "0.0.0" },
 ): JsonSchema => ({
   openrpc: "1.3.2",
