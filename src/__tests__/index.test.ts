@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { z } from "zod";
 
-import { defineVerb, parseArgs } from "@bounded-systems/verbspec";
+import { defineVerb, parseArgs, toMcpTool, toOpenApiPaths } from "@bounded-systems/verbspec";
 
 // parseArgs CLI-isms for array-typed input fields: repeated flags accumulate,
 // comma-separated values split, and the two forms compose. Scalars take the
@@ -86,5 +86,44 @@ describe("parseArgs variadic positionals", () => {
 
   test("empty when nothing is given", () => {
     expect(ids([])).toEqual([]);
+  });
+});
+
+const xquikSearch = defineVerb({
+  id: "xquik search tweets",
+  summary: "Search recent public posts",
+  actor: "read",
+  input: z.object({
+    q: z.string().min(1),
+    limit: z.coerce.number().int().min(1).max(100).default(20),
+  }),
+  output: z.object({
+    data: z.array(
+      z.object({
+        id: z.string(),
+        text: z.string(),
+      }),
+    ),
+  }),
+  run: () => ({ data: [] }),
+});
+
+describe("Xquik search verb projection", () => {
+  test("projects a typed search verb to an MCP tool", () => {
+    const tool = toMcpTool(xquikSearch);
+
+    expect(tool.name).toBe("xquik_search_tweets");
+    expect(tool.description).toBe("Search recent public posts");
+    expect(tool.inputSchema).toHaveProperty("properties");
+  });
+
+  test("projects a typed search verb to an OpenAPI operation", () => {
+    const paths = toOpenApiPaths({ [xquikSearch.id]: xquikSearch }) as Record<string, any>;
+    const operation = paths["/xquik/search/tweets"]?.post;
+
+    expect(operation.operationId).toBe("xquik_search_tweets");
+    expect(operation.summary).toBe("Search recent public posts");
+    expect(operation.requestBody.content["application/json"].schema).toHaveProperty("properties");
+    expect(operation.responses["200"].content["application/json"].schema).toHaveProperty("properties");
   });
 });
