@@ -89,9 +89,9 @@ describe("parseArgs variadic positionals", () => {
   });
 });
 
-const xquikSearch = defineVerb({
-  id: "xquik search tweets",
-  summary: "Search recent public posts",
+const searchNotes = defineVerb({
+  id: "search recent notes",
+  summary: "Search recent notes",
   actor: "read",
   input: z.object({
     q: z.string().min(1),
@@ -108,21 +108,21 @@ const xquikSearch = defineVerb({
   run: () => ({ data: [] }),
 });
 
-describe("Xquik search verb projection", () => {
+describe("multi-word verb projection", () => {
   test("projects a typed search verb to an MCP tool", () => {
-    const tool = toMcpTool(xquikSearch);
+    const tool = toMcpTool(searchNotes);
 
-    expect(tool.name).toBe("xquik_search_tweets");
-    expect(tool.description).toBe("Search recent public posts");
+    expect(tool.name).toBe("search_recent_notes");
+    expect(tool.description).toBe("Search recent notes");
     expect(tool.inputSchema).toHaveProperty("properties");
   });
 
   test("projects a typed search verb to an OpenAPI operation", () => {
-    const paths = toOpenApiPaths({ [xquikSearch.id]: xquikSearch }) as Record<string, any>;
-    const operation = paths["/xquik/search/tweets"]?.post;
+    const paths = toOpenApiPaths({ [searchNotes.id]: searchNotes }) as Record<string, any>;
+    const operation = paths["/search/recent/notes"]?.post;
 
-    expect(operation.operationId).toBe("xquik_search_tweets");
-    expect(operation.summary).toBe("Search recent public posts");
+    expect(operation.operationId).toBe("search_recent_notes");
+    expect(operation.summary).toBe("Search recent notes");
     expect(operation.requestBody.content["application/json"].schema).toHaveProperty("properties");
     expect(operation.responses["200"].content["application/json"].schema).toHaveProperty("properties");
   });
