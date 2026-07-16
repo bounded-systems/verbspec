@@ -89,6 +89,113 @@ describe("parseArgs variadic positionals", () => {
   });
 });
 
+// Strict mapping: an arg that maps to nothing the verb declares is an error, not
+// a silent no-op. This exists because `spd deploy on_hand_location_freshness` —
+// where the filter is a `--slug` flag, not a positional, and the verb declares
+// `positionals: []` — silently dropped the token and deployed EVERY card to live
+// Metabase. An unmapped arg must halt, not fall through to a default.
+const flagVerb = defineVerb({
+  id: "flag-probe",
+  summary: "test-only verb: one optional flag, no positionals",
+  actor: "work",
+  positionals: [],
+  input: z.object({ slug: z.string().optional(), dryRun: z.boolean().default(false) }),
+  output: z.object({}),
+  run: () => ({}),
+});
+
+const scalarPos = defineVerb({
+  id: "scalar-pos-probe",
+  summary: "test-only verb with a single scalar positional",
+  actor: "work",
+  positionals: ["name"],
+  input: z.object({ name: z.string(), verbose: z.boolean().default(false) }),
+  output: z.object({}),
+  run: () => ({}),
+});
+
+describe("parseArgs strict mapping — extra positionals", () => {
+  test("a verb with no positionals rejects a bare arg (the deploy footgun)", () => {
+    expect(() => parseArgs(flagVerb, ["on_hand_location_freshness"])).toThrow(
+      /unexpected positional|unexpected argument/i,
+    );
+  });
+
+  test("the rejection names the offending token", () => {
+    expect(() => parseArgs(flagVerb, ["on_hand_location_freshness"])).toThrow(
+      /on_hand_location_freshness/,
+    );
+  });
+
+  test("more positionals than declared is rejected", () => {
+    expect(() => parseArgs(scalarPos, ["alice", "bob"])).toThrow(/unexpected/i);
+  });
+
+  test("exactly the declared positionals is accepted", () => {
+    expect(parseArgs(scalarPos, ["alice"])).toMatchObject({ name: "alice" });
+  });
+
+  test("a variadic positional still absorbs any number of args", () => {
+    expect(() => parseArgs(variadic, ["a", "b", "c", "d"])).not.toThrow();
+  });
+});
+
+describe("parseArgs strict mapping — unknown flags", () => {
+  test("an unknown --flag is rejected, not silently stripped", () => {
+    expect(() => parseArgs(flagVerb, ["--slog", "x"])).toThrow(/unknown flag|unrecognized/i);
+  });
+
+  test("the rejection names the offending flag", () => {
+    expect(() => parseArgs(flagVerb, ["--slog", "x"])).toThrow(/slog/);
+  });
+
+  test("an unknown --flag=value form is also rejected", () => {
+    expect(() => parseArgs(flagVerb, ["--slog=x"])).toThrow(/unknown flag|unrecognized/i);
+  });
+
+  test("an unknown boolean --flag is also rejected", () => {
+    expect(() => parseArgs(flagVerb, ["--force"])).toThrow(/unknown flag|unrecognized/i);
+  });
+
+  test("declared flags are accepted", () => {
+    expect(parseArgs(flagVerb, ["--slug", "abc", "--dryRun"])).toMatchObject({
+      slug: "abc",
+      dryRun: true,
+    });
+  });
+
+  test("a verb with no fields rejects any flag", () => {
+    const noFields = defineVerb({
+      id: "no-fields-probe",
+      summary: "test-only verb with no input fields",
+      actor: "work",
+      input: z.object({}),
+      output: z.object({}),
+      run: () => ({}),
+    });
+    expect(() => parseArgs(noFields, ["--anything"])).toThrow(/unknown flag|unrecognized/i);
+  });
+});
+
+describe("dispatch surfaces strict-mapping errors", () => {
+  test("an extra positional through dispatch throws", async () => {
+    await expect(dispatch({ "flag-probe": flagVerb }, ["flag-probe", "stray"])).rejects.toThrow(
+      /unexpected/i,
+    );
+  });
+
+  test("an unknown flag through dispatch throws", async () => {
+    await expect(
+      dispatch({ "flag-probe": flagVerb }, ["flag-probe", "--slog", "x"]),
+    ).rejects.toThrow(/unknown flag|unrecognized/i);
+  });
+
+  test("a correct invocation through dispatch still works", async () => {
+    const out = await dispatch({ "flag-probe": flagVerb }, ["flag-probe", "--slug", "abc"]);
+    expect(out).toMatchObject({ kind: "ok", input: { slug: "abc" } });
+  });
+});
+
 const searchNotes = defineVerb({
   id: "search recent notes",
   summary: "Search recent notes",

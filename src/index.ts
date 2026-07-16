@@ -361,6 +361,10 @@ export function parseArgs<I extends ZodType>(
   const js = toInputJsonSchema(v) as { properties?: Record<string, { type?: string }> };
   const props = js.properties ?? {};
   const isArray = (key: string) => props[key]?.type === "array";
+  // Every declared input key is a valid flag; a `--flag` outside this set maps to
+  // nothing and must halt (see the strict-mapping block at the end).
+  const known = new Set(Object.keys(props));
+  const unknownFlags: string[] = [];
 
   const raw: Record<string, unknown> = {};
   const positionalValues: string[] = [];
@@ -378,10 +382,11 @@ export function parseArgs<I extends ZodType>(
     const a = argv[i]!;
     if (a.startsWith("--")) {
       const eq = a.indexOf("=");
+      const key = eq >= 0 ? a.slice(2, eq) : a.slice(2);
+      if (!known.has(key) && !unknownFlags.includes(key)) unknownFlags.push(key);
       if (eq >= 0) {
-        setRaw(a.slice(2, eq), a.slice(eq + 1));
+        setRaw(key, a.slice(eq + 1));
       } else {
-        const key = a.slice(2);
         const next = argv[i + 1];
         if (next === undefined || next.startsWith("--")) setRaw(key, true);
         else {
@@ -408,6 +413,32 @@ export function parseArgs<I extends ZodType>(
       raw[name] = positionalValues[idx];
     }
   });
+  // STRICT MAPPING: an arg that maps to nothing the verb declares must halt, not
+  // fall through. A dropped `--flag` or positional silently reverts the verb to
+  // its defaults — that is exactly how `spd deploy on_hand_location_freshness`
+  // (filter is a `--slug` flag; the verb declares no positionals) became a live
+  // deploy of EVERY card instead of one. Report both leak paths together so a
+  // caller fixes the whole line at once.
+  const valid = [...known].map((k) => `--${k}`).join(", ") || "(none)";
+  if (unknownFlags.length) {
+    const flags = unknownFlags.map((k) => `--${k}`).join(", ");
+    throw new Error(`unknown flag(s) for '${v.id}': ${flags}. Valid flags: ${valid}. See --help.`);
+  }
+  // A trailing variadic (array-typed) positional absorbs every remaining value,
+  // so it can never overflow; any other shape caps at the declared count.
+  const lastVariadic = pos.length > 0 && isArray(pos[pos.length - 1]!);
+  if (!lastVariadic && positionalValues.length > pos.length) {
+    const extra = positionalValues.slice(pos.length).join(", ");
+    const takes =
+      pos.length === 0
+        ? "takes no positional arguments"
+        : `takes ${pos.length} positional argument(s) (${pos.join(", ")})`;
+    throw new Error(
+      `unexpected positional argument(s) for '${v.id}': ${extra}. '${v.id}' ${takes}. ` +
+        `Pass values as named flags (${valid}) instead. See --help.`,
+    );
+  }
+
   // comma-split array fields (a CLI-ism, kept out of the schema), flattening the
   // accumulated occurrences so repeated and comma forms compose.
   for (const [k, val] of Object.entries(raw)) {
