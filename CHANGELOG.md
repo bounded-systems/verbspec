@@ -1,5 +1,12 @@
 # @bounded-systems/verbspec
 
+## 0.4.0 — 2026-07-16
+
+### Minor
+
+- Add `JsonSchemaVerbSpec` — a JSON-Schema-first verb (no Zod) that the OpenRPC/MCP/OpenAPI projectors accept, so non-Zod contract sources (e.g. a Cap'n Proto schema) can be projected through the same pipeline. Projection-only; dispatch stays Zod.
+- `parseArgs` now rejects CLI args that map to nothing the verb declares — unknown `--flags` (not in the input schema) and extra positionals (beyond the declared `positionals`; a trailing variadic still absorbs the rest) — instead of silently dropping them. **Behavior break:** invocations that previously passed unrecognized flags or stray positionals now throw, naming the offending token. This closes a class of footgun where a dropped arg silently reverted a verb to its schema defaults.
+
 ## 0.3.0
 
 ### Minor Changes
