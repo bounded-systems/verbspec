@@ -65,6 +65,33 @@ comma-split array values); the Zod `parse` is the only validation. The
 MCP/OpenAPI/Anthropic projections take structured JSON and consume only
 `input`/`output` — never the CLI-only `render`/`exitCode`/`warnings` hooks.
 
+### `positionals` vs. input fields
+
+`input` declares every field a verb accepts. `positionals` only *selects* which
+of those fields are read as bare arguments instead of `--flags`, in order — it
+never declares a field on its own:
+
+```ts
+positionals: ["name"],
+input: z.object({ name: z.string(), loud: z.boolean().default(false) }),
+// `greet Ada --loud`   →  name from the positional, loud from the flag
+```
+
+Two consequences, both enforced rather than silently absorbed:
+
+- **A field not listed in `positionals` is flag-only.** Declaring
+  `slug: z.string().optional()` with `positionals: []` means `myverb somevalue`
+  is an error, not a filter — pass `--slug somevalue`. Bare arguments are never
+  auto-bound to a leftover field, because a mis-bound argument that "works"
+  silently is how a scoped command becomes an unscoped one.
+- **A name in `positionals` that no input field declares is a spec error.** It
+  would bind a value that `input.parse` then strips as an unknown key, so
+  `parseArgs` rejects the spec instead.
+
+More generally: any argument that maps to nothing the verb declares — an unknown
+flag, an extra positional, or a positional naming no field — throws. Nothing
+falls through to a default.
+
 ## Design
 
 - **One spec, four surfaces.** The CLI, MCP server, Anthropic tool schema, and

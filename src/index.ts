@@ -366,6 +366,24 @@ export function parseArgs<I extends ZodType>(
   const known = new Set(Object.keys(props));
   const unknownFlags: string[] = [];
 
+  // `positionals` SELECTS input fields to read positionally — it does not declare
+  // them. A name with no matching input field binds a value that `input.parse`
+  // then strips as an unknown key, so the token vanishes with no error: the same
+  // silent-drop the unmapped-flag/extra-positional checks below exist to stop,
+  // reached through a typo'd spec instead of a typo'd command line. Check the
+  // spec itself, so it halts on every invocation rather than only the ones that
+  // happen to supply a value.
+  const undeclared = (v.positionals ?? []).filter((p) => !known.has(p));
+  if (undeclared.length) {
+    const names = undeclared.join(", ");
+    const fields = [...known].join(", ") || "(none)";
+    throw new Error(
+      `invalid spec for '${v.id}': positional(s) ${names} name no input field. ` +
+        `'positionals' selects fields declared in 'input' (${fields}) to be read ` +
+        `positionally; it does not declare new ones.`,
+    );
+  }
+
   const raw: Record<string, unknown> = {};
   const positionalValues: string[] = [];
   // Array fields accumulate repeated occurrences (`--k a --k b`); scalars take
