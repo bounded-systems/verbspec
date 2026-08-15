@@ -140,6 +140,40 @@ describe("parseArgs strict mapping — extra positionals", () => {
   });
 });
 
+// The other half of strict mapping: `positionals` names INPUT FIELDS, it does not
+// declare them. A name with no matching input field binds a value that `input.parse`
+// then strips as an unknown key, so the token vanishes with no error — the same
+// silent-drop footgun as an unmapped flag, just reached through a typo'd spec.
+const typoPos = defineVerb({
+  id: "typo-pos-probe",
+  summary: "test-only verb whose positional names no input field",
+  actor: "work",
+  positionals: ["slugg"], // typo: the input field is `slug`
+  input: z.object({ slug: z.string().optional() }),
+  output: z.object({}),
+  run: () => ({}),
+});
+
+describe("parseArgs strict mapping — undeclared positional names", () => {
+  test("a positional naming no input field is rejected, not silently dropped", () => {
+    expect(() => parseArgs(typoPos, ["somevalue"])).toThrow(
+      /positional|undeclared|unknown/i,
+    );
+  });
+
+  test("the rejection names the offending positional", () => {
+    expect(() => parseArgs(typoPos, ["somevalue"])).toThrow(/slugg/);
+  });
+
+  test("it is rejected even when no positional value is supplied", () => {
+    expect(() => parseArgs(typoPos, [])).toThrow(/slugg/);
+  });
+
+  test("a positional that does name an input field is unaffected", () => {
+    expect(parseArgs(scalarPos, ["alice"])).toMatchObject({ name: "alice" });
+  });
+});
+
 describe("parseArgs strict mapping — unknown flags", () => {
   test("an unknown --flag is rejected, not silently stripped", () => {
     expect(() => parseArgs(flagVerb, ["--slog", "x"])).toThrow(/unknown flag|unrecognized/i);
