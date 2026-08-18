@@ -1,0 +1,4 @@
+---
+bump: minor
+---
+`parseArgs` generates a `--no-<field>` negation for every boolean input, so a `z.boolean().default(true)` can be turned off from the CLI without declaring a second override flag. The negation takes no value and consumes no token (`--no-loud=false` is rejected; `myverb --no-loud alice` still reads `alice` as a positional), and booleans stay scalar — `--loud --no-loud` is last-wins. The derived names live in a flag-only set: `no-<field>` is not an input key, so `positionals: ["no-loud"]` remains a spec error, and an input field that would shadow a generated negation is rejected as one. `toHelp` renders booleans as `--loud / --no-loud` and now prints each field's default; a defaulted field is no longer also labelled `(required)`, which `z.toJSONSchema` had made it look like.
