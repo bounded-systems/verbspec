@@ -1,7 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { z } from "zod";
 
-import { defineVerb, dispatch, parseArgs, toMcpTool, toOpenApiPaths } from "@bounded-systems/verbspec";
+import {
+  defineVerb,
+  dispatch,
+  parseArgs,
+  toHelp,
+  toMcpTool,
+  toOpenApiPaths,
+} from "@bounded-systems/verbspec";
 
 // parseArgs CLI-isms for array-typed input fields: repeated flags accumulate,
 // comma-separated values split, and the two forms compose. Scalars take the
@@ -311,5 +318,157 @@ describe("dispatch multi-word ids", () => {
   test("keeps exact one-token ids working", async () => {
     const out = await dispatch({ plan, "plan session": planSession }, ["plan"]);
     expect(out).toMatchObject({ kind: "ok", id: "plan", output: { kind: "plan" } });
+  });
+});
+
+// ── boolean negation (#12) ───────────────────────────────────────────────────
+// `z.boolean().default(true)` had no way to be turned OFF from the CLI: only
+// presence-is-true worked, so "on by default, opt out on the CLI" forced authors
+// to declare a SECOND override flag and compute the effective value by hand —
+// two flags for one boolean dimension. `--no-<field>` is that missing spelling.
+const negVerb = defineVerb({
+  id: "neg-probe",
+  summary: "test-only verb with a default-true boolean",
+  actor: "work",
+  positionals: [],
+  input: z.object({
+    changedOnly: z.boolean().default(true),
+    dryRun: z.boolean().default(false),
+    slug: z.string().optional(),
+  }),
+  output: z.object({}),
+  run: () => ({}),
+});
+
+const negPos = defineVerb({
+  id: "neg-pos-probe",
+  summary: "test-only verb with a positional beside a boolean",
+  actor: "work",
+  positionals: ["name"],
+  input: z.object({ name: z.string(), loud: z.boolean().default(true) }),
+  output: z.object({}),
+  run: () => ({}),
+});
+
+describe("parseArgs boolean negation", () => {
+  test("--no-<field> turns a default(true) boolean off", () => {
+    expect(parseArgs(negVerb, ["--no-changedOnly"])).toMatchObject({ changedOnly: false });
+  });
+
+  test("the default still applies when the negation is absent", () => {
+    expect(parseArgs(negVerb, [])).toMatchObject({ changedOnly: true });
+  });
+
+  test("every boolean gets one, not only the default(true) ones", () => {
+    expect(parseArgs(negVerb, ["--dryRun", "--no-dryRun"])).toMatchObject({ dryRun: false });
+  });
+
+  test("a boolean stays scalar — the last spelling wins in either order", () => {
+    expect(parseArgs(negVerb, ["--no-changedOnly", "--changedOnly"])).toMatchObject({
+      changedOnly: true,
+    });
+    expect(parseArgs(negVerb, ["--changedOnly", "--no-changedOnly"])).toMatchObject({
+      changedOnly: false,
+    });
+  });
+
+  test("the negation carries its own value — it never eats the next token", () => {
+    expect(parseArgs(negVerb, ["--no-changedOnly", "--slug", "abc"])).toMatchObject({
+      changedOnly: false,
+      slug: "abc",
+    });
+    // The sharper case: a bare token after the negation is still a positional,
+    // not the flag's value.
+    expect(parseArgs(negPos, ["--no-loud", "alice"])).toMatchObject({
+      name: "alice",
+      loud: false,
+    });
+  });
+
+  test("--no-<field>=value is rejected rather than silently ignored", () => {
+    expect(() => parseArgs(negVerb, ["--no-changedOnly=false"])).toThrow(/takes no value/i);
+  });
+
+  test("only booleans get a negation — --no-<string field> is an unknown flag", () => {
+    expect(() => parseArgs(negVerb, ["--no-slug", "x"])).toThrow(/unknown flag|unrecognized/i);
+  });
+
+  test("the negation of an undeclared field is an unknown flag", () => {
+    expect(() => parseArgs(negVerb, ["--no-bogus"])).toThrow(/unknown flag|unrecognized/i);
+  });
+
+  test("the unknown-flag message lists the negations among the valid flags", () => {
+    expect(() => parseArgs(negVerb, ["--nope"])).toThrow(/--no-changedOnly/);
+  });
+
+  test("a negation reaches the same field through dispatch", async () => {
+    const out = await dispatch({ "neg-probe": negVerb }, ["neg-probe", "--no-changedOnly"]);
+    expect(out).toMatchObject({ kind: "ok", input: { changedOnly: false } });
+  });
+});
+
+// The negation names are DERIVED CLI spellings, not input fields. Widening the
+// one set that gated both questions would have made `positionals: ["no-loud"]`
+// legal — it binds a value `input.parse` then strips, the silent-drop this
+// package exists to refuse. The two sets stay separate; these hold that line.
+describe("parseArgs boolean negation — derived names are not input fields", () => {
+  test("a negation name in `positionals` is still a spec error", () => {
+    const negAsPositional = defineVerb({
+      id: "neg-as-positional-probe",
+      summary: "test-only verb naming a negation as a positional",
+      actor: "work",
+      positionals: ["no-loud"],
+      input: z.object({ loud: z.boolean().default(true) }),
+      output: z.object({}),
+      run: () => ({}),
+    });
+    expect(() => parseArgs(negAsPositional, [])).toThrow(/no input field/i);
+    expect(() => parseArgs(negAsPositional, [])).toThrow(/no-loud/);
+  });
+
+  test("an input field colliding with a generated negation is a spec error", () => {
+    const collide = defineVerb({
+      id: "neg-collision-probe",
+      summary: "test-only verb whose field shadows a generated negation",
+      actor: "work",
+      input: z.object({ loud: z.boolean().default(true), "no-loud": z.string().optional() }),
+      output: z.object({}),
+      run: () => ({}),
+    });
+    expect(() => parseArgs(collide, [])).toThrow(/collides/i);
+    expect(() => parseArgs(collide, [])).toThrow(/no-loud/);
+  });
+});
+
+describe("toHelp boolean negation", () => {
+  test("a boolean renders both spellings instead of a value placeholder", () => {
+    const help = toHelp(negVerb);
+    expect(help).toContain("--changedOnly / --no-changedOnly");
+    expect(help).not.toContain("--changedOnly <boolean>");
+  });
+
+  test("the default is shown, since it decides which spelling is useful", () => {
+    const help = toHelp(negVerb);
+    expect(help).toContain("--changedOnly / --no-changedOnly (default: true)");
+    expect(help).toContain("--dryRun / --no-dryRun (default: false)");
+  });
+
+  test("non-boolean flags are unchanged apart from their default", () => {
+    expect(toHelp(negVerb)).toContain("--slug <string>");
+  });
+});
+
+// Fallout from showing a boolean's default: `z.toJSONSchema` lists a DEFAULTED
+// field in `required` (the parsed output always carries it), so the old renderer
+// labelled `--limit` required — and beside a printed default that reads as a
+// flat contradiction. The default is the truthful half.
+describe("toHelp defaults", () => {
+  test("a defaulted field is not also labelled required", () => {
+    expect(toHelp(negVerb)).not.toContain("(required) (default:");
+    expect(toHelp(searchNotes)).toContain("--limit <integer> (default: 20)");
+  });
+
+  test("a field with no default keeps its required marker", () => {
+    expect(toHelp(searchNotes)).toContain("--q <string> (required)");
   });
 });

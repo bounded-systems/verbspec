@@ -92,6 +92,33 @@ More generally: any argument that maps to nothing the verb declares — an unkno
 flag, an extra positional, or a positional naming no field — throws. Nothing
 falls through to a default.
 
+### Boolean flags and `--no-`
+
+Every boolean input gets both spellings: `--loud` sets it true, `--no-loud` sets
+it false. So a boolean that is *on by default* can be turned off from the command
+line with the one field that declares it:
+
+```ts
+input: z.object({ changedOnly: z.boolean().default(true) }),
+// `check`                     →  changedOnly: true   (the default)
+// `check --no-changedOnly`    →  changedOnly: false
+```
+
+- **The negation is a derived CLI name, not an input field.** `no-changedOnly` is
+  not a key of `input`, so it is not selectable as a positional —
+  `positionals: ["no-changedOnly"]` remains a spec error. An input field that
+  would shadow a generated negation (a boolean `loud` beside a field literally
+  named `no-loud`) is a spec error too, rather than a flag that quietly means
+  only one of the two things.
+- **It takes no value and consumes no token.** `--no-loud=false` is rejected, and
+  `myverb --no-loud alice` reads `alice` as a positional, not as the flag's value.
+- **Booleans stay scalar.** `--loud --no-loud` is last-wins, the same rule every
+  other scalar flag follows.
+- **Both defaults get one.** `--no-` is generated for every boolean, not only the
+  `default(true)` ones — which spelling an author needs follows from the default,
+  and a default is a value the verb may change. Generating it conditionally would
+  mean flipping a default silently deletes a flag from every script using it.
+
 ## Design
 
 - **One spec, four surfaces.** The CLI, MCP server, Anthropic tool schema, and

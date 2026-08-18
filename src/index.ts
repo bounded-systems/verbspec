@@ -323,8 +323,48 @@ export async function dispatchNdjson(reg: Registry, line: string): Promise<strin
 // ── CLI projection: help + argv parser ───────────────────────────────────────
 
 type JsonProps = {
-  properties?: Record<string, { type?: string; description?: string }>;
+  properties?: Record<string, { type?: string; description?: string; default?: unknown }>;
   required?: string[];
+};
+
+/**
+ * The `--no-<field>` negations for a verb's boolean inputs, as a map from the
+ * derived flag name to the input field it turns off. `--no-changedOnly` is how
+ * a `z.boolean().default(true)` is opted out of on the command line, so one
+ * boolean input covers both directions and an author no longer has to declare a
+ * second override flag to express "on by default".
+ *
+ * These names are DERIVED, not declared: `no-changedOnly` is deliberately not an
+ * input key, so this set must never be folded into the set that gates positional
+ * names — `positionals: ["no-changedOnly"]` stays the spec error it is today.
+ *
+ * EVERY boolean gets one, not only the `default(true)` ones. Which spelling an
+ * author reaches for follows from the default, but the default is a value the
+ * verb may change: if `--no-x` existed only while `x` defaulted to true,
+ * flipping that default would silently delete a flag from every script using it.
+ */
+const negationsFor = (
+  props: Record<string, { type?: string } | undefined>,
+  id: string,
+): Map<string, string> => {
+  const negations = new Map<string, string>();
+  for (const [field, meta] of Object.entries(props)) {
+    if (meta?.type !== "boolean") continue;
+    const flag = `no-${field}`;
+    // An input field literally named `no-x` alongside a boolean `x` shadows the
+    // negation: `--no-x` binds the declared field and `x` becomes impossible to
+    // turn off, with no error. Halt on the spec itself — same reason as the
+    // undeclared-positional check, so it fails on every invocation rather than
+    // only the ones that happen to pass the flag.
+    if (props[flag] !== undefined) {
+      throw new Error(
+        `invalid spec for '${id}': input field '${flag}' collides with the generated ` +
+          `negation of boolean field '${field}'. Rename one — '--${flag}' cannot mean both.`,
+      );
+    }
+    negations.set(flag, field);
+  }
+  return negations;
 };
 
 /** Render a {@link VerbSpec} as CLI `--help` text (usage, positionals, flags) for `bin`. */
@@ -338,11 +378,25 @@ export function toHelp(v: VerbSpec, bin = "prx"): string {
   const lines = [`${bin} ${v.id} ${usagePos}`.trimEnd(), "", `  ${v.summary}`, ""];
   if (flags.length) {
     lines.push("Flags:");
+    const negationOf = new Map(
+      [...negationsFor(props, v.id)].map(([flag, field]) => [field, flag] as const),
+    );
     for (const f of flags) {
       const meta = props[f] ?? {};
-      const req = required.has(f) ? " (required)" : "";
+      // `z.toJSONSchema` lists a defaulted field in `required` (the parsed OUTPUT
+      // always carries it), but on a command line a field with a default is
+      // exactly the one you may omit. Printing "(required) (default: true)" says
+      // both at once; the default is the truthful half.
+      const req = required.has(f) && meta.default === undefined ? " (required)" : "";
       const desc = meta.description ? ` — ${meta.description}` : "";
-      lines.push(`  --${f} <${meta.type ?? "value"}>${req}${desc}`);
+      const neg = negationOf.get(f);
+      // Shown for every defaulted field, because dropping the (wrong) "required"
+      // marker above would otherwise leave them annotated with nothing at all —
+      // and for a boolean the default is what decides which of the two spellings
+      // the reader actually needs.
+      const dflt = meta.default === undefined ? "" : ` (default: ${JSON.stringify(meta.default)})`;
+      const name = neg ? `--${f} / --${neg}` : `--${f} <${meta.type ?? "value"}>`;
+      lines.push(`  ${name}${req}${desc}${dflt}`);
     }
   }
   return lines.join("\n");
@@ -350,9 +404,10 @@ export function toHelp(v: VerbSpec, bin = "prx"): string {
 
 /**
  * Parse argv into the verb's input, validated by its Zod schema. CLI-isms stay
- * here, not in the schemas: `--k v` / `--k=v` / boolean `--flag` / positionals,
- * and comma-split for array-typed fields (detected from the JSON Schema). The
- * Zod `parse` does coercion (`z.coerce.number`) and is the single validation.
+ * here, not in the schemas: `--k v` / `--k=v` / boolean `--flag` and its
+ * `--no-flag` negation / positionals, and comma-split for array-typed fields
+ * (detected from the JSON Schema). The Zod `parse` does coercion
+ * (`z.coerce.number`) and is the single validation.
  */
 export function parseArgs<I extends ZodType>(
   v: VerbSpec<I, ZodType>,
@@ -361,9 +416,14 @@ export function parseArgs<I extends ZodType>(
   const js = toInputJsonSchema(v) as { properties?: Record<string, { type?: string }> };
   const props = js.properties ?? {};
   const isArray = (key: string) => props[key]?.type === "array";
-  // Every declared input key is a valid flag; a `--flag` outside this set maps to
-  // nothing and must halt (see the strict-mapping block at the end).
+  // TWO sets, deliberately not one. `known` answers "is this a declared input
+  // field?" — it gates positional names and supplies the negation targets.
+  // `knownFlags` answers "is this an accepted flag name?" and is the only one
+  // carrying the derived `--no-` names, so widening the CLI vocabulary cannot
+  // quietly make `positionals: ["no-x"]` legal.
   const known = new Set(Object.keys(props));
+  const negations = negationsFor(props, v.id);
+  const knownFlags = new Set([...known, ...negations.keys()]);
   const unknownFlags: string[] = [];
 
   // `positionals` SELECTS input fields to read positionally — it does not declare
@@ -401,7 +461,21 @@ export function parseArgs<I extends ZodType>(
     if (a.startsWith("--")) {
       const eq = a.indexOf("=");
       const key = eq >= 0 ? a.slice(2, eq) : a.slice(2);
-      if (!known.has(key) && !unknownFlags.includes(key)) unknownFlags.push(key);
+      if (!knownFlags.has(key) && !unknownFlags.includes(key)) unknownFlags.push(key);
+      const negated = negations.get(key);
+      if (negated !== undefined) {
+        // `--no-x` IS the value; it never consumes the next token, and it never
+        // accumulates (a boolean is a scalar — `--x --no-x` is last-wins, the
+        // same rule every other scalar flag follows).
+        if (eq >= 0) {
+          throw new Error(
+            `--${key} takes no value: it sets '${negated}' to false. ` +
+              `Write '--${key}' on its own, or '--${negated}' to set it true.`,
+          );
+        }
+        raw[negated] = false;
+        continue;
+      }
       if (eq >= 0) {
         setRaw(key, a.slice(eq + 1));
       } else {
@@ -437,10 +511,15 @@ export function parseArgs<I extends ZodType>(
   // (filter is a `--slug` flag; the verb declares no positionals) became a live
   // deploy of EVERY card instead of one. Report both leak paths together so a
   // caller fixes the whole line at once.
+  const validFlags = [...knownFlags].map((k) => `--${k}`).join(", ") || "(none)";
+  // The positional message suggests somewhere to PUT a value, so it names input
+  // fields only — a `--no-x` accepts none.
   const valid = [...known].map((k) => `--${k}`).join(", ") || "(none)";
   if (unknownFlags.length) {
     const flags = unknownFlags.map((k) => `--${k}`).join(", ");
-    throw new Error(`unknown flag(s) for '${v.id}': ${flags}. Valid flags: ${valid}. See --help.`);
+    throw new Error(
+      `unknown flag(s) for '${v.id}': ${flags}. Valid flags: ${validFlags}. See --help.`,
+    );
   }
   // A trailing variadic (array-typed) positional absorbs every remaining value,
   // so it can never overflow; any other shape caps at the declared count.
