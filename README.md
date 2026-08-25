@@ -119,6 +119,37 @@ input: z.object({ changedOnly: z.boolean().default(true) }),
   and a default is a value the verb may change. Generating it conditionally would
   mean flipping a default silently deletes a flag from every script using it.
 
+### Enum flags — one flag for a one-axis choice
+
+When a verb's behaviour is a single mutually-exclusive choice, declare it as one
+`z.enum([...])` input, not as a set of booleans. It projects to one flag that
+takes one of the members:
+
+```ts
+input: z.object({ scope: z.enum(["changed", "all"]).default("changed") }),
+// `sync`                →  scope: "changed"   (the default)
+// `sync --scope all`    →  scope: "all"
+// `sync --scope=all`    →  scope: "all"
+```
+
+- **The members are the help text.** `--help` renders `--scope <changed|all>`
+  rather than `--scope <string>`: an enum's members *are* its content, so the
+  JSON Schema type is the one placeholder that says nothing. Defaults and the
+  `(required)` marker are unchanged — `--scope <changed|all> (default: "changed")`.
+- **Validation is the schema's, not a second copy.** A non-member is rejected by
+  `input.parse` with Zod's own message, so the CLI never carries its own list of
+  what is legal.
+- **A bare `--scope` is a missing value, and says so.** Unlike a boolean, an enum
+  has no valueless spelling, so `--scope` on its own is an arity error naming the
+  members — not the wrong-value error that a bare flag's implicit `true` would
+  otherwise draw out of the schema.
+- **Repeated enums work like any other array.** `z.array(z.enum([...]))` accepts
+  both `--tags x --tags y` and `--tags x,y`, and renders as `--tags <x|y,...>`.
+
+Preferring one enum over several booleans also keeps a one-axis choice from
+becoming a set of flags that can contradict each other: `--changed --all` is not
+representable when the axis is one field.
+
 ## Design
 
 - **One spec, four surfaces.** The CLI, MCP server, Anthropic tool schema, and

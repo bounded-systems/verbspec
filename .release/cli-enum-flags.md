@@ -1,0 +1,4 @@
+---
+bump: minor
+---
+A `z.enum([...])` input is a first-class CLI flag: one flag for a one-axis choice, instead of the several booleans authors reached for. `toHelp` renders the members as the placeholder — `--scope <changed|all>` rather than `--scope <string>`, since an enum's members are its content — beside the existing default and `(required)` markers, and a repeated enum (`z.array(z.enum([...]))`) renders `--tags <x|y,...>` for the comma form `parseArgs` already accepts. A bare `--scope` is now an arity error naming the members: an enum has no valueless spelling, so the implicit `true` a bare flag means used to reach Zod as a WRONG-VALUE error ("Invalid option: expected one of ...") reported to a caller who supplied none. Value validation is unchanged and still the schema's alone. Booleans, non-enum scalars, non-enum arrays, and the unknown-flag check are untouched.
