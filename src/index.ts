@@ -322,10 +322,47 @@ export async function dispatchNdjson(reg: Registry, line: string): Promise<strin
 
 // ── CLI projection: help + argv parser ───────────────────────────────────────
 
+type JsonProp = {
+  type?: string;
+  description?: string;
+  default?: unknown;
+  /** Present when the field is a `z.enum([...])` — the members it accepts. */
+  enum?: unknown[];
+  /** Present when the field is an array; carries the item's own `type`/`enum`. */
+  items?: { type?: string; enum?: unknown[] };
+};
+
 type JsonProps = {
-  properties?: Record<string, { type?: string; description?: string; default?: unknown }>;
+  properties?: Record<string, JsonProp>;
   required?: string[];
 };
+
+/**
+ * The members a `z.enum([...])` input accepts, or `undefined` for any other
+ * field. `z.toJSONSchema` puts them in `enum` beside a `type` — on the property
+ * itself for a scalar enum, and on `items` for `z.array(z.enum([...]))`, which
+ * is the same one-axis choice repeated. Both are read here so the CLI's two
+ * enum-aware behaviours (the help placeholder and the missing-value error)
+ * cannot disagree about what counts as an enum.
+ *
+ * An EMPTY `enum` is treated as no enum: it constrains the field to nothing, so
+ * there is no member list worth printing and no value the arity check could
+ * suggest. Zod rejects the value either way — this only decides whether the CLI
+ * layer has something useful to say first.
+ */
+const enumMembersOf = (meta: JsonProp | undefined): unknown[] | undefined => {
+  const carrier = meta?.type === "array" ? meta.items : meta;
+  const members = carrier?.enum;
+  return Array.isArray(members) && members.length > 0 ? members : undefined;
+};
+
+/**
+ * Enum members as they are written on a command line: `changed|all`. Strings
+ * appear bare (that is what the user types); anything else — a numeric enum,
+ * say — is JSON-encoded so the rendering stays unambiguous.
+ */
+const renderMembers = (members: readonly unknown[]): string =>
+  members.map((m) => (typeof m === "string" ? m : JSON.stringify(m))).join("|");
 
 /**
  * The `--no-<field>` negations for a verb's boolean inputs, as a map from the
@@ -395,7 +432,16 @@ export function toHelp(v: VerbSpec, bin = "prx"): string {
       // and for a boolean the default is what decides which of the two spellings
       // the reader actually needs.
       const dflt = meta.default === undefined ? "" : ` (default: ${JSON.stringify(meta.default)})`;
-      const name = neg ? `--${f} / --${neg}` : `--${f} <${meta.type ?? "value"}>`;
+      // An enum's whole content is its member list, so `<string>` — technically
+      // true — is the one placeholder that tells the reader nothing. Print the
+      // members instead: `--scope <changed|all>` is the one-axis choice this
+      // flag exists to express, and a repeated enum (`z.array(z.enum([...]))`)
+      // gets the same list with the comma form that `parseArgs` accepts.
+      const members = enumMembersOf(meta);
+      const placeholder = members
+        ? `${renderMembers(members)}${meta.type === "array" ? ",..." : ""}`
+        : (meta.type ?? "value");
+      const name = neg ? `--${f} / --${neg}` : `--${f} <${placeholder}>`;
       lines.push(`  ${name}${req}${desc}${dflt}`);
     }
   }
@@ -413,7 +459,7 @@ export function parseArgs<I extends ZodType>(
   v: VerbSpec<I, ZodType>,
   argv: readonly string[],
 ): z.infer<I> {
-  const js = toInputJsonSchema(v) as { properties?: Record<string, { type?: string }> };
+  const js = toInputJsonSchema(v) as JsonProps;
   const props = js.properties ?? {};
   const isArray = (key: string) => props[key]?.type === "array";
   // TWO sets, deliberately not one. `known` answers "is this a declared input
@@ -480,8 +526,25 @@ export function parseArgs<I extends ZodType>(
         setRaw(key, a.slice(eq + 1));
       } else {
         const next = argv[i + 1];
-        if (next === undefined || next.startsWith("--")) setRaw(key, true);
-        else {
+        if (next === undefined || next.startsWith("--")) {
+          // A bare flag means `true` — right for a boolean, never right for an
+          // enum, which has no valueless spelling. Left to fall through, the
+          // `true` reaches Zod and comes back as "Invalid option: expected one
+          // of ...", which describes a WRONG VALUE to someone who passed none —
+          // pointing at the member list when the actual fix is to supply a
+          // value at all. The CLI layer already knows the difference here, so
+          // it says so; the members still come along, since the next thing the
+          // reader needs is which one to write.
+          const members = enumMembersOf(props[key]);
+          if (members) {
+            const one = renderMembers([members[0]]);
+            throw new Error(
+              `--${key} needs a value: one of ${renderMembers(members)}. ` +
+                `Write '--${key} ${one}' or '--${key}=${one}'. See --help.`,
+            );
+          }
+          setRaw(key, true);
+        } else {
           setRaw(key, next);
           i++;
         }

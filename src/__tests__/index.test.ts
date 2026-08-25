@@ -472,3 +472,127 @@ describe("toHelp defaults", () => {
     expect(toHelp(searchNotes)).toContain("--q <string> (required)");
   });
 });
+
+// A one-axis choice is ONE enum input, not two booleans. The value path already
+// worked — `z.enum` parses like any other scalar — so what was missing was the
+// projection telling anyone it existed: `--scope <string>` names the JSON Schema
+// type and hides the members, which is the whole content of an enum.
+
+const enumVerb = defineVerb({
+  id: "enum-probe",
+  summary: "test-only verb for enum input projection",
+  actor: "work",
+  input: z.object({
+    scope: z.enum(["changed", "all"]).default("changed"),
+    level: z.enum(["low", "high"]).describe("verbosity"),
+    tags: z.array(z.enum(["x", "y"])).default([]),
+    allow: z.array(z.string()).default([]),
+    loud: z.boolean().default(false),
+    note: z.string().optional(),
+  }),
+  output: z.object({}),
+  run: () => ({}),
+});
+
+describe("toHelp enum inputs", () => {
+  test("an enum renders its members instead of its JSON Schema type", () => {
+    const help = toHelp(enumVerb);
+    expect(help).toContain("--scope <changed|all>");
+    expect(help).not.toContain("--scope <string>");
+  });
+
+  test("the members sit alongside the existing default and required markers", () => {
+    const help = toHelp(enumVerb);
+    expect(help).toContain('--scope <changed|all> (default: "changed")');
+    expect(help).toContain("--level <low|high> (required) — verbosity");
+  });
+
+  test("a repeated enum shows the members with the comma form parseArgs accepts", () => {
+    expect(toHelp(enumVerb)).toContain("--tags <x|y,...>");
+  });
+
+  test("an array with no enum item is unchanged", () => {
+    expect(toHelp(enumVerb)).toContain("--allow <array>");
+  });
+
+  test("non-string members are JSON-encoded, so the rendering stays unambiguous", () => {
+    const numeric = defineVerb({
+      id: "numeric-enum-probe",
+      summary: "test-only verb with a numeric enum",
+      actor: "work",
+      input: z.object({ lvl: z.enum({ One: 1, Two: 2 }) }),
+      output: z.object({}),
+      run: () => ({}),
+    });
+    expect(toHelp(numeric)).toContain("--lvl <1|2>");
+  });
+});
+
+describe("parseArgs enum inputs", () => {
+  test("both flag spellings bind a member", () => {
+    expect(parseArgs(enumVerb, ["--level", "high"])).toMatchObject({ level: "high" });
+    expect(parseArgs(enumVerb, ["--level=high"])).toMatchObject({ level: "high" });
+  });
+
+  test("the default applies when the flag is absent", () => {
+    expect(parseArgs(enumVerb, ["--level", "low"])).toMatchObject({ scope: "changed" });
+  });
+
+  test("a non-member is rejected by the schema, naming the members", () => {
+    expect(() => parseArgs(enumVerb, ["--level", "loud"])).toThrow(/low.*high/s);
+  });
+
+  test("a repeated enum accumulates and comma-splits like any other array", () => {
+    const argv = ["--level", "low", "--tags", "x", "--tags", "y"];
+    expect(parseArgs(enumVerb, argv)).toMatchObject({ tags: ["x", "y"] });
+    expect(parseArgs(enumVerb, ["--level", "low", "--tags", "x,y"])).toMatchObject({
+      tags: ["x", "y"],
+    });
+  });
+});
+
+// A bare flag means `true`, which is right for a boolean and impossible for an
+// enum. Left to fall through it reached Zod as a WRONG VALUE ("Invalid option:
+// expected one of ...") reported to someone who supplied none — so the caller
+// was pointed at the member list when the fix was to write a value at all.
+describe("parseArgs enum inputs — a bare enum flag is an arity error", () => {
+  test("a trailing enum flag says a value is missing, and which ones fit", () => {
+    expect(() => parseArgs(enumVerb, ["--level", "low", "--scope"])).toThrow(
+      "--scope needs a value: one of changed|all. Write '--scope changed' or " +
+        "'--scope=changed'. See --help.",
+    );
+  });
+
+  test("an enum flag followed by another flag is the same error", () => {
+    expect(() => parseArgs(enumVerb, ["--scope", "--level", "low"])).toThrow(
+      /--scope needs a value/,
+    );
+  });
+
+  test("a repeated enum is covered too", () => {
+    expect(() => parseArgs(enumVerb, ["--level", "low", "--tags"])).toThrow(
+      /--tags needs a value: one of x\|y/,
+    );
+  });
+
+  test("an EMPTY value is not an arity error — the schema still judges it", () => {
+    expect(() => parseArgs(enumVerb, ["--level="])).toThrow(/Invalid option/);
+  });
+
+  test("a bare boolean is untouched", () => {
+    expect(parseArgs(enumVerb, ["--level", "low", "--loud"])).toMatchObject({ loud: true });
+  });
+
+  // The arity check keys off the enum, not off "a value-taking flag", so a bare
+  // non-enum scalar keeps reaching Zod exactly as before — it still lands as
+  // `true` and is reported as a type error, not as a missing value.
+  test("a bare non-enum scalar is untouched, so the change stays enum-only", () => {
+    expect(() => parseArgs(enumVerb, ["--level", "low", "--note"])).toThrow(
+      /expected string, received boolean/,
+    );
+  });
+
+  test("an unknown flag is still reported as unknown, not as a missing value", () => {
+    expect(() => parseArgs(enumVerb, ["--level", "low", "--bogus"])).toThrow(/unknown flag/);
+  });
+});
